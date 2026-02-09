@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Virtual environment
+venv/
+.env
+
+# Logs
+logs/
+app.log
+
+# Local cloned repos
+local_repos/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.tar

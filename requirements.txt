@@ -1,0 +1,27 @@
+# =========================
+# Email (Gmail)
+# =========================
+imapclient
+pyzmail36
+
+# =========================
+# Outlook / Microsoft Graph
+# =========================
+msal
+
+# =========================
+# HTTP & Web scraping
+# =========================
+requests
+beautifulsoup4
+
+# =========================
+# Webhook server (Azure → Your App)
+# =========================
+fastapi
+uvicorn
+
+# =========================
+# Utilities
+# =========================
+python-dotenv
