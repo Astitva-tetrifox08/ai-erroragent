@@ -1,23 +1,22 @@
 # ================= IMPORTS ================= #
 
-from email_service.email_reader import EmailReader
-from email_parser.generic_error_parser import parse_error
+from fastapi import FastAPI, Request
 from repo_resolver.resolver import RepoResolver
-from sentry_fetcher import fetch_sentry_issue
 from github.github_fetcher import GitHubFetcher
 from github.github_models_client import ask_github_models
 from notifiers.teams_notifier import notify_teams
-
 from utils.logger import setup_logging, get_logger
 
-setup_logging()              # 🔥 THIS WAS MISSING
+# ================= SETUP LOGGING ================= #
+
+setup_logging()
 logger = get_logger("main")
 
+# ================= FASTAPI APP ================= #
+
+app = FastAPI()
 
 # ================= CONFIG ================= #
-
-EMAIL = "maurya.astitva@gmail.com"
-APP_PASSWORD = "qqwc iagi thfe gkjw"
 
 TEAMS_WEBHOOK_URL = (
     "https://synoptechbusiness.webhook.office.com/webhookb2/"
@@ -26,115 +25,104 @@ TEAMS_WEBHOOK_URL = (
     "faefc126-436c-4f27-ad2d-ee1d1b3066ab/V2AMy5S0eCmK97aaBnXCk2KcXtTaqajPvYJ0uI4aS1PBg1"
 )
 
+# ================= HEALTH CHECK ================= #
 
-# ================= MAIN FLOW ================= #
+@app.get("/")
+def health():
+    return {"status": "AI Agent is running 🚀"}
 
-def main():
-    logger.info("🚀 AI Agent started")
+# ================= AZURE WEBHOOK ENDPOINT ================= #
 
-    # ---------- 1️⃣ READ EMAIL ---------- #
+@app.post("/azure/alert")
+async def azure_alert(request: Request):
+
+    logger.info("🚨 Azure alert received")
+
     try:
-        logger.info("Reading latest email")
+        payload = await request.json()
+        logger.debug(f"Full payload: {payload}")
 
-        reader = EmailReader(EMAIL, APP_PASSWORD)
-        raw_email = reader.read_latest_email()
+    except Exception:
+        logger.error("Failed to read Azure payload", exc_info=True)
+        return {"status": "invalid_payload"}
 
-        logger.info("Email successfully read")
-        logger.debug(raw_email)
+    # ---------- PARSE AZURE COMMON ALERT SCHEMA ---------- #
 
-    except Exception as e:
-        logger.critical("Failed to read email", exc_info=True)
-        return
-
-
-    # ---------- 2️⃣ PARSE ERROR ---------- #
-    logger.info("Parsing error from email")
-
-    parsed = parse_error(raw_email)
-
-    logger.info("Initial parsing completed")
-    logger.debug(parsed)
-
-
-    # ---------- 3️⃣ FETCH SENTRY ISSUE (SAFE) ---------- #
-    service_url = parsed.get("service_url")
-
-    if parsed.get("file") is None and service_url and "sentry.io" in service_url:
-        try:
-            logger.info(f"Fetching Sentry issue from {service_url}")
-
-            issue_text = fetch_sentry_issue(service_url)
-            parsed = parse_error(issue_text)
-
-            logger.info("Sentry issue parsed successfully")
-            logger.debug(parsed)
-
-        except Exception as e:
-            logger.warning("Skipping Sentry fetch (not accessible)", exc_info=True)
-    else:
-        logger.info("Sentry fetch not required")
-
-
-    # ---------- 4️⃣ RESOLVE GITHUB REPO ---------- #
-    logger.info("Resolving GitHub repository")
-
-    resolver = RepoResolver()
-    repo = resolver.resolve(parsed)
-
-    if repo == "UNKNOWN_REPO":
-        logger.error("Repository could not be resolved")
-        return
-
-    logger.info(f"Resolved repository: {repo}")
-
-
-    # ---------- 5️⃣ FETCH REPO CODE ---------- #
     try:
-        logger.info("Fetching repository code from GitHub")
+        essentials = payload.get("data", {}).get("essentials", {})
+        context = payload.get("data", {}).get("alertContext", {})
 
+        parsed = {
+            "is_error": True,
+            "message": essentials.get("alertRule"),
+            "file": None,
+            "severity": essentials.get("severity"),
+            "service_url": None,
+            "github_link": None,
+            "project_name": context.get("resourceName"),
+            "alert_name": essentials.get("alertRule")
+        }
+
+        logger.info("Azure alert parsed successfully")
+        logger.debug(parsed)
+
+    except Exception:
+        logger.error("Azure parsing failed", exc_info=True)
+        return {"status": "parse_failed"}
+
+    # ---------- RESOLVE GITHUB REPO ---------- #
+
+    try:
+        resolver = RepoResolver()
+        repo = resolver.resolve(parsed)
+
+        if repo == "UNKNOWN_REPO":
+            logger.error("Repository could not be resolved")
+            return {"status": "repo_not_found"}
+
+        logger.info(f"Resolved repository: {repo}")
+
+    except Exception:
+        logger.error("Repository resolution failed", exc_info=True)
+        return {"status": "repo_resolution_failed"}
+
+    # ---------- FETCH REPOSITORY CODE ---------- #
+
+    try:
         fetcher = GitHubFetcher()
-        repo_code = fetcher.fetch_repo_code(
-            repo,
-            parsed.get("file")  # may be None
-        )
+        repo_code = fetcher.fetch_repo_code(repo, None)
 
         if not repo_code.strip():
-            logger.warning("No relevant code found in repository")
-            return
+            logger.warning("No relevant repository code found")
+            return {"status": "no_code_found"}
 
         logger.info("Repository code fetched successfully")
 
-    except Exception as e:
+    except Exception:
         logger.error("Failed to fetch repository code", exc_info=True)
-        return
+        return {"status": "fetch_failed"}
 
+    # ---------- SEND TO AI (GITHUB MODELS) ---------- #
 
-    # ---------- 6️⃣ ASK GITHUB COPILOT MODELS ---------- #
     try:
-        logger.info("Sending code to GitHub Models (Copilot)")
-
         ai_response = ask_github_models(parsed, repo_code)
-
-        logger.info("AI fix suggestion received")
+        logger.info("AI suggestion received")
         logger.debug(ai_response)
 
-    except Exception as e:
+    except Exception:
         logger.error("AI analysis failed", exc_info=True)
-        return
+        return {"status": "ai_failed"}
 
+    # ---------- SEND TO MICROSOFT TEAMS ---------- #
 
-    # ---------- 7️⃣ NOTIFY MICROSOFT TEAMS ---------- #
     try:
-        logger.info("Sending notification to Microsoft Teams")
-
         notify_teams(
             webhook_url=TEAMS_WEBHOOK_URL,
-            title="🚨 AI Agent – Production Error Detected",
+            title="🚨 Azure Production Alert Detected",
             error_summary={
                 "message": parsed.get("message"),
-                "file": parsed.get("file"),
                 "severity": parsed.get("severity"),
-                "service_url": parsed.get("service_url"),
+                "project_name": parsed.get("project_name"),
                 "github_repo": repo
             },
             ai_fix=ai_response
@@ -142,14 +130,10 @@ def main():
 
         logger.info("Teams notification sent successfully")
 
-    except Exception as e:
+    except Exception:
         logger.error("Failed to notify Microsoft Teams", exc_info=True)
+        return {"status": "teams_failed"}
 
+    logger.info("✅ Azure alert handled successfully")
 
-    logger.info("✅ AI Agent execution completed successfully")
-
-
-# ================= ENTRY POINT ================= #
-
-if __name__ == "__main__":
-    main()
+    return {"status": "success"}
