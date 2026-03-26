@@ -1,40 +1,61 @@
 import requests
+from utils.logger import get_logger
+
+logger = get_logger("teams_notifier")
 
 
 def notify_teams(webhook_url: str, title: str, error_summary: dict, ai_fix: str):
-    """
-    Send error + AI fix to Microsoft Teams
-    """
+    facts = [
+        {"title": "Severity", "value": error_summary.get("severity") or "N/A"},
+        {"title": "Project", "value": error_summary.get("project_name") or "N/A"},
+        {"title": "Error", "value": error_summary.get("message") or "N/A"},
+        {"title": "Repository", "value": error_summary.get("github_repo") or "N/A"},
+    ]
 
-    message = {
-        "@type": "MessageCard",
-        "@context": "http://schema.org/extensions",
-        "summary": title,
-        "themeColor": "E81123",
-        "title": title,
-        "sections": [
+    card = {
+        "type": "message",
+        "attachments": [
             {
-                "activityTitle": "🚨 Error Detected",
-                "facts": [
-                    {"name": "Error Message", "value": error_summary.get("message")},
-                    {"name": "File", "value": error_summary.get("file")},
-                    {"name": "Service", "value": error_summary.get("service_url")},
-                    {"name": "GitHub Repo", "value": error_summary.get("github_link")},
-                ],
-                "markdown": True
-            },
-            {
-                "activityTitle": "🤖 AI Suggested Fix",
-                "text": f"```\n{ai_fix}\n```",
-                "markdown": True
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "contentUrl": None,
+                "content": {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.4",
+                    "body": [
+                        {
+                            "type": "TextBlock",
+                            "size": "Large",
+                            "weight": "Bolder",
+                            "color": "Attention",
+                            "text": title,
+                        },
+                        {
+                            "type": "FactSet",
+                            "facts": facts,
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "AI Suggested Fix",
+                            "weight": "Bolder",
+                            "spacing": "Large",
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": ai_fix,
+                            "wrap": True,
+                            "fontType": "Monospace",
+                            "size": "Small",
+                        },
+                    ],
+                },
             }
-        ]
+        ],
     }
 
-    response = requests.post(webhook_url, json=message)
+    response = requests.post(webhook_url, json=card, timeout=15)
 
-    if response.status_code == 200:
-        print("✅ Notification sent to Microsoft Teams")
+    if response.status_code in (200, 202):
+        logger.info("Teams notification sent")
     else:
-        print("❌ Failed to send Teams notification")
-        print(response.text)
+        logger.error(f"Teams notification failed: {response.status_code} {response.text}")

@@ -1,44 +1,65 @@
-import json
+import os
+import requests
 from urllib.parse import urlparse
+from utils.logger import get_logger
 
-# 🔥 THIS WILL PRINT WHEN FILE IS LOADED
-
-print("🔥 NEW RESOLVER LOADED 🔥")
+logger = get_logger("resolver")
 
 
 class RepoResolver:
     def __init__(self):
-        with open("repo_resolver/repo_map.json") as f:
-            self.map = json.load(f)
+        self.org = os.getenv("GITHUB_ORG")
+        self.token = os.getenv("GITHUB_TOKEN")
+        if not self.org:
+            raise RuntimeError("GITHUB_ORG environment variable is required")
+        if not self.token:
+            raise RuntimeError("GITHUB_TOKEN environment variable is required")
+        self.repos = self._fetch_org_repos()
+
+    def _fetch_org_repos(self):
+        repos = []
+        page = 1
+        while True:
+            resp = requests.get(
+                f"https://api.github.com/orgs/{self.org}/repos",
+                headers={
+                    "Authorization": f"Bearer {self.token}",
+                    "Accept": "application/vnd.github+json",
+                },
+                params={"per_page": 100, "page": page},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if not data:
+                break
+            repos.extend([r["name"] for r in data if not r.get("archived")])
+            page += 1
+        logger.info(f"Loaded {len(repos)} repos from '{self.org}'")
+        return repos
 
     def resolve(self, parsed):
-
-        print("DEBUG project_name:", parsed.get("project_name"))
-
-        # 1. Direct GitHub link
         if parsed.get("github_link"):
             return parsed["github_link"].replace("https://github.com/", "")
 
         project = (parsed.get("project_name") or "").lower()
 
-        # 2. STRONG MATCH (exact)
-        if project in self.map:
-            return self.map[project]["repo"]
+        # Exact match
+        for repo in self.repos:
+            if repo.lower() == project:
+                return f"{self.org}/{repo}"
 
-        # 3. PARTIAL MATCH (contains)
-        for key in self.map:
-            if key.lower() in project or project in key.lower():
-                return self.map[key]["repo"]
+        # Partial match
+        for repo in self.repos:
+            if repo.lower() in project or project in repo.lower():
+                return f"{self.org}/{repo}"
 
-        # 4. SERVICE URL fallback
+        # Service URL fallback
         if parsed.get("service_url"):
             domain = urlparse(parsed["service_url"]).netloc.lower()
+            for repo in self.repos:
+                if repo.lower() in domain:
+                    return f"{self.org}/{repo}"
 
-            for key in self.map:
-                if key.lower() in domain:
-                    return self.map[key]["repo"]
-
-        print("DEBUG: No match found for:", project)
-
-        # 🔥 FORCE RETURN (TEMP FIX)
+        logger.warning(f"No match for project: {project}")
         return "UNKNOWN_REPO"
