@@ -11,6 +11,7 @@ from utils.logger import setup_logging, get_logger
 
 setup_logging()
 logger = get_logger("main")
+logger.info("🔥 MAIN FILE VERSION V9 🔥")
 
 # ================= FASTAPI APP ================= #
 
@@ -38,16 +39,16 @@ async def azure_alert(request: Request):
 
     logger.info("🚨 Azure alert received")
 
+    # ---------- READ PAYLOAD ---------- #
     try:
         payload = await request.json()
         logger.debug(f"Full payload: {payload}")
 
     except Exception:
-        logger.error("Failed to read Azure payload", exc_info=True)
+        logger.error("❌ Failed to read Azure payload", exc_info=True)
         return {"status": "invalid_payload"}
 
-    # ---------- PARSE AZURE COMMON ALERT SCHEMA ---------- #
-
+    # ---------- PARSE AZURE ALERT ---------- #
     try:
         essentials = payload.get("data", {}).get("essentials", {})
         context = payload.get("data", {}).get("alertContext", {})
@@ -63,58 +64,56 @@ async def azure_alert(request: Request):
             "alert_name": essentials.get("alertRule")
         }
 
-        logger.info("Azure alert parsed successfully")
+        logger.info("✅ Azure alert parsed successfully")
+        logger.info(f"📌 Incoming project_name: {parsed.get('project_name')}")
         logger.debug(parsed)
 
     except Exception:
-        logger.error("Azure parsing failed", exc_info=True)
+        logger.error("❌ Azure parsing failed", exc_info=True)
         return {"status": "parse_failed"}
 
-    # ---------- RESOLVE GITHUB REPO ---------- #
-
+    # ---------- RESOLVE REPOSITORY ---------- #
     try:
         resolver = RepoResolver()
         repo = resolver.resolve(parsed)
 
         if repo == "UNKNOWN_REPO":
-            logger.error("Repository could not be resolved")
+            logger.error(f"❌ Repository could not be resolved for project: {parsed.get('project_name')}")
             return {"status": "repo_not_found"}
 
-        logger.info(f"Resolved repository: {repo}")
+        logger.info(f"✅ Resolved repository: {repo}")
 
     except Exception:
-        logger.error("Repository resolution failed", exc_info=True)
+        logger.error("❌ Repository resolution failed", exc_info=True)
         return {"status": "repo_resolution_failed"}
 
-    # ---------- FETCH REPOSITORY CODE ---------- #
-
+    # ---------- FETCH REPO CODE ---------- #
     try:
         fetcher = GitHubFetcher()
         repo_code = fetcher.fetch_repo_code(repo, None)
 
         if not repo_code.strip():
-            logger.warning("No relevant repository code found")
+            logger.warning("⚠️ No repository code found")
             return {"status": "no_code_found"}
 
-        logger.info("Repository code fetched successfully")
+        logger.info("✅ Repository code fetched successfully")
 
     except Exception:
-        logger.error("Failed to fetch repository code", exc_info=True)
+        logger.error("❌ Failed to fetch repository code", exc_info=True)
         return {"status": "fetch_failed"}
 
-    # ---------- SEND TO AI (GITHUB MODELS) ---------- #
-
+    # ---------- AI ANALYSIS ---------- #
     try:
         ai_response = ask_github_models(parsed, repo_code)
-        logger.info("AI suggestion received")
+
+        logger.info("✅ AI suggestion received")
         logger.debug(ai_response)
 
     except Exception:
-        logger.error("AI analysis failed", exc_info=True)
+        logger.error("❌ AI analysis failed", exc_info=True)
         return {"status": "ai_failed"}
 
-    # ---------- SEND TO MICROSOFT TEAMS ---------- #
-
+    # ---------- SEND TO TEAMS ---------- #
     try:
         notify_teams(
             webhook_url=TEAMS_WEBHOOK_URL,
@@ -128,12 +127,12 @@ async def azure_alert(request: Request):
             ai_fix=ai_response
         )
 
-        logger.info("Teams notification sent successfully")
+        logger.info("✅ Teams notification sent successfully")
 
     except Exception:
-        logger.error("Failed to notify Microsoft Teams", exc_info=True)
+        logger.error("❌ Failed to notify Microsoft Teams", exc_info=True)
         return {"status": "teams_failed"}
 
-    logger.info("✅ Azure alert handled successfully")
+    logger.info("🎉 Azure alert handled successfully")
 
     return {"status": "success"}

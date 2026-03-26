@@ -1,15 +1,8 @@
 {
-  "prod-inkbiz-notifications": {
+  "ai-agent-tool": {
     "repo": "Tetrifox/InkBiz"
   },
-  "InkBiz Too Many Api Failure": {
+  "inkbiz": {
     "repo": "Tetrifox/InkBiz"
-  },
-  "tetrifox.sentry.io": {
-    "repo": "Astitva0809/error-demo"
-  },
-  "error-demo.onrender.com": {
-  "repo": "Astitva0809/error-demo"
-}
-
+  }
 }
