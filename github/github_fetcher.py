@@ -33,7 +33,8 @@ class GitHubFetcher:
             if ".git" in root:
                 continue
             for f in files:
-                if f.endswith(".py"):
+                ext = os.path.splitext(f)[1]
+                if ext in (".py", ".cs", ".ts", ".js", ".tsx", ".jsx", ".java", ".go"):
                     with open(os.path.join(root, f), "r", encoding="utf-8", errors="ignore") as fh:
                         collected.append(f"\n# {os.path.relpath(os.path.join(root, f), local_path)}\n{fh.read()}")
 

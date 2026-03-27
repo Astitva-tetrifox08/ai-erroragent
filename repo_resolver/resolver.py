@@ -61,5 +61,35 @@ class RepoResolver:
                 if repo.lower() in domain:
                     return f"{self.org}/{repo}"
 
+        # File path search - find which repo contains the exception file
+        file_path = parsed.get("file")
+        if file_path:
+            filename = file_path.split("/")[-1]
+            repo = self._search_file_in_org(filename)
+            if repo:
+                return repo
+
         logger.warning(f"No match for project: {project}")
         return "UNKNOWN_REPO"
+
+    def _search_file_in_org(self, filename):
+        """Search GitHub for which repo in the org contains this file."""
+        try:
+            resp = requests.get(
+                "https://api.github.com/search/code",
+                headers={
+                    "Authorization": f"Bearer {self.token}",
+                    "Accept": "application/vnd.github+json",
+                },
+                params={"q": f"filename:{filename} org:{self.org}"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            items = resp.json().get("items", [])
+            if items:
+                repo_name = items[0]["repository"]["full_name"]
+                logger.info(f"Found '{filename}' in repo: {repo_name}")
+                return repo_name
+        except Exception:
+            logger.warning(f"GitHub code search failed for: {filename}", exc_info=True)
+        return None

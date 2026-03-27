@@ -8,7 +8,10 @@ def notify_teams(webhook_url: str, title: str, error_summary: dict, ai_fix: str)
     facts = [
         {"title": "Severity", "value": error_summary.get("severity") or "N/A"},
         {"title": "Project", "value": error_summary.get("project_name") or "N/A"},
-        {"title": "Error", "value": error_summary.get("message") or "N/A"},
+        {"title": "Exception", "value": error_summary.get("exception_type") or "N/A"},
+        {"title": "Message", "value": error_summary.get("message") or "N/A"},
+        {"title": "File", "value": error_summary.get("file") or "N/A"},
+        {"title": "Line", "value": str(error_summary.get("line_number") or "N/A")},
         {"title": "Repository", "value": error_summary.get("github_repo") or "N/A"},
     ]
 
@@ -53,7 +56,7 @@ def notify_teams(webhook_url: str, title: str, error_summary: dict, ai_fix: str)
         ],
     }
 
-    response = requests.post(webhook_url, json=card, timeout=15)
+    response = requests.post(webhook_url, json=card, timeout=60)
 
     if response.status_code in (200, 202):
         logger.info("Teams notification sent")
