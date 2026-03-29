@@ -5,9 +5,9 @@ import json
 GITHUB_MODELS_URL = "https://models.inference.ai.azure.com/chat/completions"
 
 def ask_github_models(parsed_error: dict, repo_code: str) -> str:
-    token = os.getenv("GITHUB_TOKEN")
+    token = os.getenv("GITHUB_MODELS_TOKEN")
     if not token:
-        raise RuntimeError("❌ GITHUB_TOKEN not set")
+        raise RuntimeError("GITHUB_MODELS_TOKEN environment variable is required")
 
     headers = {
         "Authorization": f"Bearer {token}",

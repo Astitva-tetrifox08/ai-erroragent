@@ -1,138 +1,119 @@
-# ================= IMPORTS ================= #
-
+import os
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request
+
+load_dotenv()
 from repo_resolver.resolver import RepoResolver
 from github.github_fetcher import GitHubFetcher
 from github.github_models_client import ask_github_models
 from notifiers.teams_notifier import notify_teams
 from utils.logger import setup_logging, get_logger
 
-# ================= SETUP LOGGING ================= #
-
 setup_logging()
 logger = get_logger("main")
-logger.info("🔥 MAIN FILE VERSION V9 🔥")
-
-# ================= FASTAPI APP ================= #
 
 app = FastAPI()
 
-# ================= CONFIG ================= #
+TEAMS_WEBHOOK_URL = os.getenv("TEAMS_WEBHOOK_URL")
+if not TEAMS_WEBHOOK_URL:
+    raise RuntimeError("TEAMS_WEBHOOK_URL environment variable is required")
 
-TEAMS_WEBHOOK_URL = (
-    "https://synoptechbusiness.webhook.office.com/webhookb2/"
-    "45b65599-b77b-497a-93c7-b0d662277619@e001af36-37b7-49be-961e-1881605dc83a/"
-    "IncomingWebhook/626bb7cbb2cf41aea9e32b2bf813ebe1/"
-    "faefc126-436c-4f27-ad2d-ee1d1b3066ab/V2AMy5S0eCmK97aaBnXCk2KcXtTaqajPvYJ0uI4aS1PBg1"
-)
+resolver = RepoResolver()
+fetcher = GitHubFetcher()
 
-# ================= HEALTH CHECK ================= #
 
 @app.get("/")
 def health():
-    return {"status": "AI Agent is running 🚀"}
+    return {"status": "running", "repos_loaded": len(resolver.repos)}
 
-# ================= AZURE WEBHOOK ENDPOINT ================= #
 
 @app.post("/azure/alert")
 async def azure_alert(request: Request):
+    logger.info("Azure alert received")
 
-    logger.info("🚨 Azure alert received")
-
-    # ---------- READ PAYLOAD ---------- #
     try:
         payload = await request.json()
-        logger.debug(f"Full payload: {payload}")
-
+        logger.debug(f"Payload: {payload}")
     except Exception:
-        logger.error("❌ Failed to read Azure payload", exc_info=True)
+        logger.error("Failed to read payload", exc_info=True)
         return {"status": "invalid_payload"}
 
-    # ---------- PARSE AZURE ALERT ---------- #
+    essentials = payload.get("data", {}).get("essentials", {})
+    context = payload.get("data", {}).get("alertContext", {})
+
+    # Extract exception details from alert dimensions
+    dimensions = {}
+    condition = context.get("condition", {})
+    for criteria in condition.get("allOf", []):
+        for dim in criteria.get("dimensions", []):
+            dimensions[dim.get("name")] = dim.get("value")
+
+    parsed = {
+        "message": dimensions.get("ExceptionMessage") or essentials.get("alertRule"),
+        "exception_type": dimensions.get("ExceptionType"),
+        "severity": essentials.get("severity"),
+        "project_name": dimensions.get("AppName") or context.get("resourceName") or essentials.get("targetResourceName"),
+        "file": dimensions.get("FilePath"),
+        "line_number": dimensions.get("LineNumber"),
+        "service_url": None,
+        "github_link": None,
+    }
+
+    logger.info(f"Project: {parsed.get('project_name')}, "
+                f"Exception: {parsed.get('exception_type')}: {parsed.get('message', '')[:100]}")
+
+    if not parsed.get("project_name") and not parsed.get("file"):
+        logger.error("No project name or file path in alert - cannot resolve repo")
+        return {"status": "no_project_name"}
+
+    # Resolve repo
+    repo = resolver.resolve(parsed)
+    if repo == "UNKNOWN_REPO":
+        logger.error(f"Could not resolve repo for: {parsed.get('project_name')}")
+        return {"status": "repo_not_found"}
+    logger.info(f"Resolved repo: {repo}")
+
+    #  Fetch code (specific file first, then full repo)
     try:
-        essentials = payload.get("data", {}).get("essentials", {})
-        context = payload.get("data", {}).get("alertContext", {})
-
-        parsed = {
-            "is_error": True,
-            "message": essentials.get("alertRule"),
-            "file": None,
-            "severity": essentials.get("severity"),
-            "service_url": None,
-            "github_link": None,
-            "project_name": context.get("resourceName"),
-            "alert_name": essentials.get("alertRule")
-        }
-
-        logger.info("✅ Azure alert parsed successfully")
-        logger.info(f"📌 Incoming project_name: {parsed.get('project_name')}")
-        logger.debug(parsed)
-
-    except Exception:
-        logger.error("❌ Azure parsing failed", exc_info=True)
-        return {"status": "parse_failed"}
-
-    # ---------- RESOLVE REPOSITORY ---------- #
-    try:
-        resolver = RepoResolver()
-        repo = resolver.resolve(parsed)
-
-        if repo == "UNKNOWN_REPO":
-            logger.error(f"❌ Repository could not be resolved for project: {parsed.get('project_name')}")
-            return {"status": "repo_not_found"}
-
-        logger.info(f"✅ Resolved repository: {repo}")
-
-    except Exception:
-        logger.error("❌ Repository resolution failed", exc_info=True)
-        return {"status": "repo_resolution_failed"}
-
-    # ---------- FETCH REPO CODE ---------- #
-    try:
-        fetcher = GitHubFetcher()
-        repo_code = fetcher.fetch_repo_code(repo, None)
-
+        repo_code = ""
+        if parsed.get("file"):
+            repo_code = fetcher.fetch_repo_code(repo, parsed["file"])
         if not repo_code.strip():
-            logger.warning("⚠️ No repository code found")
+            repo_code = fetcher.fetch_repo_code(repo)
+        if not repo_code.strip():
+            logger.warning("No code found in repo")
             return {"status": "no_code_found"}
-
-        logger.info("✅ Repository code fetched successfully")
-
     except Exception:
-        logger.error("❌ Failed to fetch repository code", exc_info=True)
+        logger.error("Failed to fetch repo code", exc_info=True)
         return {"status": "fetch_failed"}
 
-    # ---------- AI ANALYSIS ---------- #
+    #  AI analysis
     try:
         ai_response = ask_github_models(parsed, repo_code)
-
-        logger.info("✅ AI suggestion received")
-        logger.debug(ai_response)
-
+        logger.info("AI analysis complete")
     except Exception:
-        logger.error("❌ AI analysis failed", exc_info=True)
+        logger.error("AI analysis failed", exc_info=True)
         return {"status": "ai_failed"}
 
-    # ---------- SEND TO TEAMS ---------- #
+    #  Send to Teams
     try:
         notify_teams(
             webhook_url=TEAMS_WEBHOOK_URL,
-            title="🚨 Azure Production Alert Detected",
+            title="Azure Production Alert",
             error_summary={
                 "message": parsed.get("message"),
+                "exception_type": parsed.get("exception_type"),
                 "severity": parsed.get("severity"),
                 "project_name": parsed.get("project_name"),
-                "github_repo": repo
+                "github_repo": repo,
+                "file": parsed.get("file"),
+                "line_number": parsed.get("line_number"),
             },
-            ai_fix=ai_response
+            ai_fix=ai_response,
         )
-
-        logger.info("✅ Teams notification sent successfully")
-
+        logger.info("Teams notification sent")
     except Exception:
-        logger.error("❌ Failed to notify Microsoft Teams", exc_info=True)
+        logger.error("Failed to notify Teams", exc_info=True)
         return {"status": "teams_failed"}
-
-    logger.info("🎉 Azure alert handled successfully")
 
     return {"status": "success"}
