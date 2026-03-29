@@ -44,36 +44,43 @@ class RepoResolver:
 
         project = (parsed.get("project_name") or "").lower()
 
-        # Exact match
-        for repo in self.repos:
-            if repo.lower() == project:
-                return f"{self.org}/{repo}"
-
-        # Partial match
-        for repo in self.repos:
-            if repo.lower() in project or project in repo.lower():
-                return f"{self.org}/{repo}"
-
-        # Service URL fallback
-        if parsed.get("service_url"):
-            domain = urlparse(parsed["service_url"]).netloc.lower()
+        if project:
+            # Exact match
             for repo in self.repos:
-                if repo.lower() in domain:
+                if repo.lower() == project:
                     return f"{self.org}/{repo}"
+
+            # Partial match
+            for repo in self.repos:
+                if repo.lower() in project or project in repo.lower():
+                    return f"{self.org}/{repo}"
+
+            # Service URL fallback
+            if parsed.get("service_url"):
+                domain = urlparse(parsed["service_url"]).netloc.lower()
+                for repo in self.repos:
+                    if repo.lower() in domain:
+                        return f"{self.org}/{repo}"
 
         # File path search - find which repo contains the exception file
         file_path = parsed.get("file")
         if file_path:
-            filename = file_path.split("/")[-1]
-            repo = self._search_file_in_org(filename)
+            repo = self._search_file_in_org(file_path)
             if repo:
                 return repo
 
         logger.warning(f"No match for project: {project}")
         return "UNKNOWN_REPO"
 
-    def _search_file_in_org(self, filename):
-        """Search GitHub for which repo in the org contains this file."""
+    def _search_file_in_org(self, file_path):
+        """Search GitHub for which repo in the org contains this file path."""
+        # Strip Docker container prefix (/app/) to get the real repo path
+        clean_path = file_path.lstrip("/")
+        if clean_path.startswith("app/"):
+            clean_path = clean_path[4:]
+
+        filename = clean_path.split("/")[-1]
+
         try:
             resp = requests.get(
                 "https://api.github.com/search/code",
@@ -81,15 +88,15 @@ class RepoResolver:
                     "Authorization": f"Bearer {self.token}",
                     "Accept": "application/vnd.github+json",
                 },
-                params={"q": f"filename:{filename} org:{self.org}"},
+                params={"q": f"filename:{filename} path:{'/'.join(clean_path.split('/')[:-1])} org:{self.org}"},
                 timeout=10,
             )
             resp.raise_for_status()
             items = resp.json().get("items", [])
             if items:
                 repo_name = items[0]["repository"]["full_name"]
-                logger.info(f"Found '{filename}' in repo: {repo_name}")
+                logger.info(f"Found '{clean_path}' in repo: {repo_name}")
                 return repo_name
         except Exception:
-            logger.warning(f"GitHub code search failed for: {filename}", exc_info=True)
+            logger.warning(f"GitHub code search failed for: {clean_path}", exc_info=True)
         return None

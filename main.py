@@ -62,8 +62,8 @@ async def azure_alert(request: Request):
     logger.info(f"Project: {parsed.get('project_name')}, "
                 f"Exception: {parsed.get('exception_type')}: {parsed.get('message', '')[:100]}")
 
-    if not parsed.get("project_name"):
-        logger.error("Could not extract project name from alert")
+    if not parsed.get("project_name") and not parsed.get("file"):
+        logger.error("No project name or file path in alert - cannot resolve repo")
         return {"status": "no_project_name"}
 
     # Resolve repo
